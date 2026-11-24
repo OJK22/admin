@@ -78,18 +78,38 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     throw new Error("Unauthorized");
   }
 
-  if (res.status === 204 || (res.status === 200 && res.headers.get("content-length") === "0")) {
+  // Handle empty responses before attempting to parse a body.
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
     return {} as T;
   }
 
   const text = await res.text();
-  if (!text) return {} as T;
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text as unknown as T;
+  if (!text) {
+    if (!res.ok) throw new Error(`Request failed (HTTP ${res.status})`);
+    return {} as T;
   }
+
+  let data: unknown = text;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Some successful endpoints may return plain text.
+  }
+
+  if (!res.ok) {
+    const payload = data as { message?: string; error?: string } | null;
+    const message =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error || `Request failed (HTTP ${res.status})`
+        : text || `Request failed (HTTP ${res.status})`;
+    const error = new Error(message) as Error & { response?: { data: unknown } };
+    error.response = { data };
+    throw error;
+  }
+
+  return data as T;
+}
 }
 
 export const authApi = {
